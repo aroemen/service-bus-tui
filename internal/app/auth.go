@@ -23,6 +23,7 @@ type CredentialType int
 const (
 	AzureCLI CredentialType = iota
 	InteractiveBrowser
+	ServicePrincipal
 	ConnectionString
 )
 
@@ -33,6 +34,12 @@ type AuthModel struct {
 	inNamespaceMode        bool
 	inConnectionStringMode bool
 	connectionStringInput  textinput.Model
+	inServicePrincipalMode bool
+	servicePrincipalInputs [4]textinput.Model
+	focusedSPInput         int
+	spTenantID             string
+	spClientID             string
+	spClientSecret         string
 	errMsg                 string
 	isAuthenticating       bool
 	namespaces             []azure.NamespaceInfo
@@ -53,20 +60,36 @@ func NewAuthModel() *AuthModel {
 	ti.EchoCharacter = '*'
 	ti.Width = 80
 
+	// Service Principal text inputs: Tenant ID, Client ID, Client Secret, Namespace (optional)
+	var spInputs [4]textinput.Model
+	for i := range spInputs {
+		spInputs[i] = textinput.New()
+		spInputs[i].Width = 60
+	}
+	spInputs[0].Placeholder = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+	spInputs[1].Placeholder = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+	spInputs[2].Placeholder = "your-client-secret"
+	spInputs[2].EchoMode = textinput.EchoPassword
+	spInputs[2].EchoCharacter = '*'
+	spInputs[3].Placeholder = "my-namespace"
+
 	m := &AuthModel{
 		authOptions: []string{
 			"Interactive Browser",
+			"Service Principal",
 			"Connection String",
 		},
 		credentialTypes: []CredentialType{
 			InteractiveBrowser,
+			ServicePrincipal,
 			ConnectionString,
 		},
-		selectedAuth:          0,
-		connectionStringInput: ti,
-		spinner:               s,
-		height:                50,
-		scrollOffset:          0,
+		selectedAuth:           0,
+		connectionStringInput:  ti,
+		servicePrincipalInputs: spInputs,
+		spinner:                s,
+		height:                 50,
+		scrollOffset:           0,
 	}
 
 	if user, ok := azure.GetAzureCliAuthenticatedUser(); ok {
@@ -112,6 +135,15 @@ func (m *AuthModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.errMsg = ""
 				return m, spinnerCmd
 			}
+			if m.inServicePrincipalMode {
+				m.inServicePrincipalMode = false
+				for i := range m.servicePrincipalInputs {
+					m.servicePrincipalInputs[i].SetValue("")
+				}
+				m.focusedSPInput = 0
+				m.errMsg = ""
+				return m, spinnerCmd
+			}
 			if m.inNamespaceMode {
 				m.inNamespaceMode = false
 				m.namespaces = nil
@@ -123,6 +155,8 @@ func (m *AuthModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.inConnectionStringMode {
 			return m.updateConnectionStringInput(msg)
+		} else if m.inServicePrincipalMode {
+			return m.updateServicePrincipalInput(msg)
 		} else if m.inNamespaceMode {
 			return m.updateNamespaceSelection(msg)
 		} else {
@@ -183,6 +217,12 @@ func (m *AuthModel) updateAuthSelection(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.connectionStringInput.Focus()
 			return m, textinput.Blink
 		}
+		if m.selectedCredentialType() == ServicePrincipal {
+			m.inServicePrincipalMode = true
+			m.focusedSPInput = 0
+			m.servicePrincipalInputs[0].Focus()
+			return m, textinput.Blink
+		}
 		m.isAuthenticating = true
 		return m, tea.Batch(m.spinner.Tick, m.authenticateAndListNamespacesCmd())
 	}
@@ -208,6 +248,49 @@ func (m *AuthModel) updateConnectionStringInput(msg tea.KeyMsg) (tea.Model, tea.
 	}
 }
 
+func (m *AuthModel) updateServicePrincipalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "tab", "down":
+		m.servicePrincipalInputs[m.focusedSPInput].Blur()
+		m.focusedSPInput = (m.focusedSPInput + 1) % len(m.servicePrincipalInputs)
+		m.servicePrincipalInputs[m.focusedSPInput].Focus()
+		return m, textinput.Blink
+	case "shift+tab", "up":
+		m.servicePrincipalInputs[m.focusedSPInput].Blur()
+		m.focusedSPInput = (m.focusedSPInput - 1 + len(m.servicePrincipalInputs)) % len(m.servicePrincipalInputs)
+		m.servicePrincipalInputs[m.focusedSPInput].Focus()
+		return m, textinput.Blink
+	case "enter":
+		tenantID := strings.TrimSpace(m.servicePrincipalInputs[0].Value())
+		clientID := strings.TrimSpace(m.servicePrincipalInputs[1].Value())
+		clientSecret := strings.TrimSpace(m.servicePrincipalInputs[2].Value())
+		namespace := strings.TrimSpace(m.servicePrincipalInputs[3].Value())
+
+		if tenantID == "" || clientID == "" || clientSecret == "" {
+			m.errMsg = "tenant ID, client ID, and client secret are required"
+			return m, nil
+		}
+
+		m.errMsg = ""
+		m.spTenantID = tenantID
+		m.spClientID = clientID
+		m.spClientSecret = clientSecret
+		m.isAuthenticating = true
+		m.inServicePrincipalMode = false
+
+		if namespace != "" {
+			// Namespace provided — skip discovery, connect directly
+			return m, tea.Batch(m.spinner.Tick, m.connectWithNamespaceCmd(namespace))
+		}
+		// No namespace — attempt discovery
+		return m, tea.Batch(m.spinner.Tick, m.authenticateAndListNamespacesForSPCmd())
+	default:
+		var cmd tea.Cmd
+		m.servicePrincipalInputs[m.focusedSPInput], cmd = m.servicePrincipalInputs[m.focusedSPInput].Update(msg)
+		return m, cmd
+	}
+}
+
 func (m *AuthModel) View() string {
 	var s strings.Builder
 
@@ -219,6 +302,8 @@ func (m *AuthModel) View() string {
 	} else {
 		if m.inConnectionStringMode {
 			m.viewConnectionStringInput(&s)
+		} else if m.inServicePrincipalMode {
+			m.viewServicePrincipalInput(&s)
 		} else if m.inNamespaceMode {
 			m.viewNamespaceSelection(&s)
 		} else {
@@ -307,6 +392,26 @@ func (m *AuthModel) viewConnectionStringInput(s *strings.Builder) {
 	s.WriteString("\n")
 }
 
+func (m *AuthModel) viewServicePrincipalInput(s *strings.Builder) {
+	s.WriteString(styles.Subtle.Render("Enter Service Principal Credentials"))
+	s.WriteString("\n\n")
+
+	labels := [4]string{"Tenant ID", "Client ID", "Client Secret", "Namespace"}
+	for i, label := range labels {
+		if i == m.focusedSPInput {
+			s.WriteString(styles.Selected.Render(label))
+		} else {
+			s.WriteString(styles.Subtle.Render(label))
+		}
+		if i == 3 {
+			s.WriteString(styles.Subtle.Render(" (optional — required if SP lacks Reader role on subscription)"))
+		}
+		s.WriteString("\n")
+		s.WriteString(m.servicePrincipalInputs[i].View())
+		s.WriteString("\n\n")
+	}
+}
+
 type NamespacesLoadedMsg struct {
 	Namespaces []azure.NamespaceInfo
 }
@@ -336,15 +441,38 @@ func (m *AuthModel) authenticateAndListNamespacesCmd() tea.Cmd {
 	}
 }
 
+func (m *AuthModel) authenticateAndListNamespacesForSPCmd() tea.Cmd {
+	tenantID := m.spTenantID
+	clientID := m.spClientID
+	clientSecret := m.spClientSecret
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), authContextTimeout)
+		defer cancel()
+
+		namespaces, err := azure.GetNamespacesForServicePrincipal(ctx, tenantID, clientID, clientSecret)
+		if err != nil {
+			return ErrorMsg(fmt.Sprintf("failed to authenticate or list namespaces: %v", err))
+		}
+
+		return NamespacesLoadedMsg{Namespaces: namespaces}
+	}
+}
+
 func (m *AuthModel) connectWithNamespaceCmd(namespace string) tea.Cmd {
 	credType := m.selectedCredentialType()
+	tenantID := m.spTenantID
+	clientID := m.spClientID
+	clientSecret := m.spClientSecret
 	return func() tea.Msg {
 		var client *azure.ServiceBusClient
 		var err error
 
-		if credType == AzureCLI {
+		switch credType {
+		case AzureCLI:
 			client, err = azure.NewServiceBusClientFromAzureCLI(namespace)
-		} else {
+		case ServicePrincipal:
+			client, err = azure.NewServiceBusClientFromServicePrincipal(namespace, tenantID, clientID, clientSecret)
+		default:
 			client, err = azure.NewServiceBusClientFromInteractiveBrowser(namespace)
 		}
 

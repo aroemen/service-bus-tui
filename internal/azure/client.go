@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -142,6 +143,7 @@ func newInteractiveBrowserCredential() (azcore.TokenCredential, error) {
 
 func newServiceBusClientWithCredential(cred azcore.TokenCredential, namespace string) (*ServiceBusClient, error) {
 	fqdn := fmt.Sprintf("%s.servicebus.windows.net", namespace)
+	log.Printf("[newServiceBusClientWithCredential] namespace=%q fqdn=%q", namespace, fqdn)
 
 	client, err := azservicebus.NewClient(fqdn, cred, nil)
 	if err != nil {
@@ -174,6 +176,22 @@ func GetNamespacesForInteractiveBrowser(ctx context.Context) ([]NamespaceInfo, e
 		return nil, err
 	}
 	return getNamespaces(ctx, cred)
+}
+
+func GetNamespacesForServicePrincipal(ctx context.Context, tenantID, clientID, clientSecret string) ([]NamespaceInfo, error) {
+	cred, err := azidentity.NewClientSecretCredential(tenantID, clientID, clientSecret, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create service principal credential: %w", err)
+	}
+	return getNamespaces(ctx, cred)
+}
+
+func NewServiceBusClientFromServicePrincipal(namespace, tenantID, clientID, clientSecret string) (*ServiceBusClient, error) {
+	cred, err := azidentity.NewClientSecretCredential(tenantID, clientID, clientSecret, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create service principal credential: %w", err)
+	}
+	return newServiceBusClientWithCredential(cred, namespace)
 }
 
 func getNamespaces(ctx context.Context, cred azcore.TokenCredential) ([]NamespaceInfo, error) {
@@ -317,14 +335,17 @@ func (sbc *ServiceBusClient) ListTopics(ctx context.Context) ([]string, error) {
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
+			log.Printf("[ListTopics] error fetching page: %v", err)
 			return nil, fmt.Errorf("failed to list topics: %w", err)
 		}
 
+		log.Printf("[ListTopics] got page with %d topics", len(page.Topics))
 		for _, topic := range page.Topics {
 			topics = append(topics, topic.TopicName)
 		}
 	}
 
+	log.Printf("[ListTopics] total topics found: %d, pager.More() returned false", len(topics))
 	return topics, nil
 }
 
@@ -335,14 +356,17 @@ func (sbc *ServiceBusClient) ListQueues(ctx context.Context) ([]string, error) {
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
+			log.Printf("[ListQueues] error fetching page: %v", err)
 			return nil, fmt.Errorf("failed to list queues: %w", err)
 		}
 
+		log.Printf("[ListQueues] got page with %d queues", len(page.Queues))
 		for _, queue := range page.Queues {
 			queues = append(queues, queue.QueueName)
 		}
 	}
 
+	log.Printf("[ListQueues] total queues found: %d, pager.More() returned false", len(queues))
 	return queues, nil
 }
 
