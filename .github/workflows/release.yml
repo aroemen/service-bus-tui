@@ -32,7 +32,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
-          # WINGET_PKGS_GITHUB_TOKEN: ${{ secrets.WINGET_PKGS_GITHUB_TOKEN }}
+          WINGET_PKGS_GITHUB_TOKEN: ${{ secrets.WINGET_PKGS_GITHUB_TOKEN }}
 
   chocolatey:
     runs-on: windows-latest
