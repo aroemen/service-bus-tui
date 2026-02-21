@@ -27,6 +27,7 @@ type ExplorerModel struct {
 	height        int
 	namespaceName string
 	prevCursor    int
+	showHelp      bool
 }
 
 func NewExplorerModel(namespaceName string, client *azure.ServiceBusClient) *ExplorerModel {
@@ -65,6 +66,18 @@ func (m *ExplorerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detail.SetSize(m.detailWidth()-2, m.contentHeight())
 
 	case tea.KeyMsg:
+		// Help panel toggle
+		if msg.String() == "?" {
+			m.showHelp = !m.showHelp
+			return m, nil
+		}
+		if m.showHelp {
+			if msg.String() == "esc" {
+				m.showHelp = false
+			}
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "tab":
 			m.switchPane()
@@ -160,6 +173,10 @@ func (m *ExplorerModel) syncDetailWithCursor() {
 }
 
 func (m *ExplorerModel) View() string {
+	if m.showHelp {
+		return renderHelp(m.width, m.height)
+	}
+
 	var s strings.Builder
 
 	s.WriteString(styles.Subtle.Render("Namespace: " + m.namespaceName))
@@ -213,7 +230,7 @@ func (m *ExplorerModel) View() string {
 	s.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, leftPane, middlePane, rightPane))
 	s.WriteString("\n")
 
-	s.WriteString(styles.Subtle.Render("tab: switch pane • ↑↓/jk: navigate • ctrl+c: quit"))
+	s.WriteString(styles.Subtle.Render("tab: switch pane • ↑↓/jk: navigate • ?: help • ctrl+c: quit"))
 	s.WriteString("\n")
 
 	return s.String()
