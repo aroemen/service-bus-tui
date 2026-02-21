@@ -32,12 +32,14 @@ Planned authentication methods:
 - Peek messages from subscriptions (active and DLQ)
 - Tabular display with sequence number, message ID, subject, enqueued time, and body preview
 - JSON body formatting in preview
+- Paginated browsing (100 messages per page) with automatic page detection at boundaries
 
 ### Navigation
 - Keyboard-driven interface
 - `up/down` or `j/k`: Navigate items
 - `left/right` or `h/l` or `enter`: Expand/collapse nodes
 - `tab`: Switch between namespace tree and messages pane
+- `ctrl+n` / `ctrl+p`: Next/previous page of messages
 - `esc`: Go back
 - `ctrl+c`: Quit
 
@@ -48,6 +50,12 @@ Planned authentication methods:
 ```bash
 brew tap monsieurtib/tap
 brew install service-bus-tui
+```
+
+### Chocolatey (Windows)
+
+```bash
+choco install service-bus-tui
 ```
 
 ### Go Install
