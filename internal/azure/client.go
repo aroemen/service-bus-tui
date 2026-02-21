@@ -388,7 +388,7 @@ func (sbc *ServiceBusClient) ListSubscriptions(ctx context.Context, topicName st
 	return subscriptions, nil
 }
 
-func (sbc *ServiceBusClient) PeekMessages(ctx context.Context, entityName string, isDeadLetter bool, maxMessages int) ([]MessageInfo, error) {
+func (sbc *ServiceBusClient) PeekMessages(ctx context.Context, entityName string, isDeadLetter bool, maxMessages int, fromSequenceNumber *int64) ([]MessageInfo, error) {
 	// entityName format: "topic/subscription" or "queue"
 	parts := strings.SplitN(entityName, "/", 2)
 	if len(parts) != 2 {
@@ -421,7 +421,14 @@ func (sbc *ServiceBusClient) PeekMessages(ctx context.Context, entityName string
 	}
 	defer receiver.Close(ctx)
 
-	peekedMessages, err := receiver.PeekMessages(ctx, maxMessages, nil)
+	var peekOpts *azservicebus.PeekMessagesOptions
+	if fromSequenceNumber != nil {
+		peekOpts = &azservicebus.PeekMessagesOptions{
+			FromSequenceNumber: fromSequenceNumber,
+		}
+	}
+
+	peekedMessages, err := receiver.PeekMessages(ctx, maxMessages, peekOpts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to peek messages: %w", err)
 	}
@@ -454,4 +461,24 @@ func (sbc *ServiceBusClient) PeekMessages(ctx context.Context, entityName string
 	}
 
 	return result, nil
+}
+
+func (sbc *ServiceBusClient) GetMessageCount(ctx context.Context, entityName string, isDeadLetter bool) (int64, error) {
+	parts := strings.SplitN(entityName, "/", 2)
+	if len(parts) != 2 {
+		return -1, fmt.Errorf("invalid entity name format: %s (expected 'topic/subscription')", entityName)
+	}
+
+	topicName := parts[0]
+	subscriptionName := parts[1]
+
+	resp, err := sbc.adminClient.GetSubscriptionRuntimeProperties(ctx, topicName, subscriptionName, nil)
+	if err != nil {
+		return -1, err
+	}
+
+	if isDeadLetter {
+		return int64(resp.DeadLetterMessageCount), nil
+	}
+	return int64(resp.ActiveMessageCount), nil
 }

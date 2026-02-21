@@ -9,10 +9,26 @@ import (
 	"github.com/MonsieurTib/service-bus-tui/internal/azure"
 	"github.com/MonsieurTib/service-bus-tui/internal/styles"
 	"github.com/MonsieurTib/service-bus-tui/internal/table"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/reflow/wordwrap"
+)
+
+const pageSize = 100
+
+type pageDirection int
+
+const (
+	pageInitial pageDirection = iota
+	pageNext
+	pagePrev
+)
+
+var (
+	nextPageKey = key.NewBinding(key.WithKeys("ctrl+n"))
+	prevPageKey = key.NewBinding(key.WithKeys("ctrl+p"))
 )
 
 type MessagesModel struct {
@@ -27,10 +43,21 @@ type MessagesModel struct {
 	width        int
 	height       int
 	isEmpty      bool
+
+	// pagination
+	currentPage        int     // 0-indexed
+	pageStartSequences []int64 // first sequence number of each loaded page
+	hasMore            bool    // true when last batch returned exactly pageSize messages
+	totalMessages      int64   // total message count from runtime properties, -1 if unknown
 }
 
 type MessagesLoadedMsg struct {
-	Messages []azure.MessageInfo
+	Messages  []azure.MessageInfo
+	Direction pageDirection
+}
+
+type messageCountMsg struct {
+	Count int64 // -1 if unknown/error
 }
 
 func NewMessagesModel(client *azure.ServiceBusClient) *MessagesModel {
@@ -83,6 +110,35 @@ func (m *MessagesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if !m.isEmpty && !m.isLoading {
+			// Explicit page navigation shortcuts
+			switch {
+			case key.Matches(msg, nextPageKey):
+				if cmd := m.loadNextPage(); cmd != nil {
+					return m, cmd
+				}
+			case key.Matches(msg, prevPageKey):
+				if cmd := m.loadPrevPage(); cmd != nil {
+					return m, cmd
+				}
+			}
+
+			rowCount := len(m.table.Rows())
+			if rowCount > 0 {
+				isDown := msg.String() == "down" || msg.String() == "j"
+				isUp := msg.String() == "up" || msg.String() == "k"
+
+				if isDown && m.table.Cursor() == rowCount-1 && m.hasMore {
+					if cmd := m.loadNextPage(); cmd != nil {
+						return m, cmd
+					}
+				}
+				if isUp && m.table.Cursor() == 0 && m.currentPage > 0 {
+					if cmd := m.loadPrevPage(); cmd != nil {
+						return m, cmd
+					}
+				}
+			}
+
 			var tableCmd tea.Cmd
 			m.table, tableCmd = m.table.Update(msg)
 			return m, tableCmd
@@ -91,7 +147,27 @@ func (m *MessagesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case MessagesLoadedMsg:
 		m.isLoading = false
 		m.messages = msg.Messages
+		m.hasMore = len(msg.Messages) == pageSize
 		m.updateTableRows()
+
+		switch msg.Direction {
+		case pageInitial, pageNext:
+			m.table.SetCursor(0)
+		case pagePrev:
+			m.table.SetCursor(len(m.table.Rows()) - 1)
+		}
+
+		if len(msg.Messages) > 0 {
+			startSeq := msg.Messages[0].SequenceNumber
+			if m.currentPage >= len(m.pageStartSequences) {
+				m.pageStartSequences = append(m.pageStartSequences, startSeq)
+			} else {
+				m.pageStartSequences[m.currentPage] = startSeq
+			}
+		}
+
+	case messageCountMsg:
+		m.totalMessages = msg.Count
 
 	case ErrorMsg:
 		m.isLoading = false
@@ -105,6 +181,41 @@ func (m *MessagesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *MessagesModel) loadNextPage() tea.Cmd {
+	if !m.hasMore || m.isLoading || len(m.messages) == 0 {
+		return nil
+	}
+
+	m.currentPage++
+	lastSeq := m.messages[len(m.messages)-1].SequenceNumber
+	fromSeq := lastSeq + 1
+
+	m.isLoading = true
+	m.errMsg = ""
+
+	return tea.Batch(
+		m.spinner.Tick,
+		m.loadMessagesCmd(&fromSeq, pageNext),
+	)
+}
+
+func (m *MessagesModel) loadPrevPage() tea.Cmd {
+	if m.currentPage <= 0 || m.isLoading {
+		return nil
+	}
+
+	m.currentPage--
+	fromSeq := m.pageStartSequences[m.currentPage]
+
+	m.isLoading = true
+	m.errMsg = ""
+
+	return tea.Batch(
+		m.spinner.Tick,
+		m.loadMessagesCmd(&fromSeq, pagePrev),
+	)
+}
+
 func (m *MessagesModel) LoadMessages(entityName string, isDeadLetter bool) tea.Cmd {
 	m.entityName = entityName
 	m.isDeadLetter = isDeadLetter
@@ -112,11 +223,16 @@ func (m *MessagesModel) LoadMessages(entityName string, isDeadLetter bool) tea.C
 	m.isEmpty = false
 	m.errMsg = ""
 	m.messages = nil
+	m.currentPage = 0
+	m.pageStartSequences = nil
+	m.hasMore = false
+	m.totalMessages = -1
 	m.updateTableRows()
 
 	return tea.Batch(
 		m.spinner.Tick,
-		m.loadMessagesCmd(),
+		m.loadMessagesCmd(nil, pageInitial),
+		m.fetchMessageCountCmd(),
 	)
 }
 
@@ -218,10 +334,80 @@ func (m *MessagesModel) ViewContent() string {
 		return styles.Subtle.Render("No messages found")
 	}
 
-	return m.table.View()
+	tableView := m.table.View()
+
+	// Page indicator
+	pageInfo := m.buildPageIndicator()
+	if pageInfo != "" {
+		tableView += "\n" + pageInfo
+	}
+
+	return tableView
 }
 
-func (m *MessagesModel) loadMessagesCmd() tea.Cmd {
+func (m *MessagesModel) buildPageIndicator() string {
+	// Only show if there's pagination context (not on the only page)
+	if m.currentPage == 0 && !m.hasMore {
+		return ""
+	}
+
+	var totalPages string
+	if m.totalMessages > 0 {
+		tp := (m.totalMessages + pageSize - 1) / pageSize
+		totalPages = fmt.Sprintf("%d", tp)
+	} else if !m.hasMore {
+		// We're on the last page, so we know the total
+		totalPages = fmt.Sprintf("%d", m.currentPage+1)
+	} else {
+		totalPages = "?"
+	}
+
+	parts := []string{
+		fmt.Sprintf("Page %d/%s", m.currentPage+1, totalPages),
+	}
+
+	var nav []string
+	if m.hasMore {
+		nav = append(nav, "Ctrl+N next")
+	}
+	if m.currentPage > 0 {
+		nav = append(nav, "Ctrl+P prev")
+	}
+	if len(nav) > 0 {
+		parts = append(parts, strings.Join(nav, " · "))
+	}
+
+	indicator := styles.Subtle.Render(strings.Join(parts, " · "))
+
+	indicatorStyle := lipgloss.NewStyle().
+		MarginTop(1).
+		MarginRight(2)
+
+	if m.width > 0 {
+		indicatorStyle = indicatorStyle.Width(m.width - 2).Align(lipgloss.Right)
+	}
+
+	return indicatorStyle.Render(indicator)
+}
+
+func (m *MessagesModel) fetchMessageCountCmd() tea.Cmd {
+	client := m.client
+	entityName := m.entityName
+	isDeadLetter := m.isDeadLetter
+
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		count, err := client.GetMessageCount(ctx, entityName, isDeadLetter)
+		if err != nil {
+			return messageCountMsg{Count: -1}
+		}
+		return messageCountMsg{Count: count}
+	}
+}
+
+func (m *MessagesModel) loadMessagesCmd(fromSequenceNumber *int64, direction pageDirection) tea.Cmd {
 	client := m.client
 	entityName := m.entityName
 	isDeadLetter := m.isDeadLetter
@@ -230,12 +416,15 @@ func (m *MessagesModel) loadMessagesCmd() tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		messages, err := client.PeekMessages(ctx, entityName, isDeadLetter, 100)
+		messages, err := client.PeekMessages(ctx, entityName, isDeadLetter, pageSize, fromSequenceNumber)
 		if err != nil {
 			return ErrorMsg(fmt.Sprintf("failed to peek messages: %v", err))
 		}
 
-		return MessagesLoadedMsg{Messages: messages}
+		return MessagesLoadedMsg{
+			Messages:  messages,
+			Direction: direction,
+		}
 	}
 }
 
