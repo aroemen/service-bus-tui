@@ -34,12 +34,21 @@ Planned authentication methods:
 - JSON body formatting in preview
 - Paginated browsing (100 messages per page) with automatic page detection at boundaries
 
+### Message Resending
+- Resend selected messages back to their source topic or queue
+- Works on both active and dead-letter messages (DLQ replay)
+- Multi-message selection support
+- Option to keep original or generate new Message IDs
+- Real-time progress tracking
+
 ### Navigation
 - Keyboard-driven interface
 - `up/down` or `j/k`: Navigate items
 - `left/right` or `h/l` or `enter`: Expand/collapse nodes
 - `tab`: Switch between namespace tree and messages pane
 - `ctrl+n` / `ctrl+p`: Next/previous page of messages
+- `space`: Select/deselect messages
+- `R`: Resend selected messages
 - `esc`: Go back
 - `ctrl+c`: Quit
 
