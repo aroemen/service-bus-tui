@@ -61,12 +61,6 @@ brew tap monsieurtib/tap
 brew install service-bus-tui
 ```
 
-### Chocolatey (Windows)
-
-```bash
-choco install service-bus-tui
-```
-
 ### Go Install
 
 ```bash
