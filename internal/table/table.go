@@ -5,6 +5,7 @@ package table
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -21,11 +22,12 @@ var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 type Model struct {
 	KeyMap KeyMap
 
-	cols   []Column
-	rows   []Row
-	cursor int
-	focus  bool
-	styles Styles
+	cols     []Column
+	rows     []Row
+	cursor   int
+	focus    bool
+	styles   Styles
+	selected map[int]struct{}
 
 	viewport viewport.Model
 	start    int
@@ -56,7 +58,6 @@ type KeyMap struct {
 
 // DefaultKeyMap returns a default set of keybindings.
 func DefaultKeyMap() KeyMap {
-	const spacebar = " "
 	return KeyMap{
 		LineUp: key.NewBinding(
 			key.WithKeys("up", "k"),
@@ -71,7 +72,7 @@ func DefaultKeyMap() KeyMap {
 			key.WithHelp("b/pgup", "page up"),
 		),
 		PageDown: key.NewBinding(
-			key.WithKeys("f", "pgdown", spacebar),
+			key.WithKeys("f", "pgdown"),
 			key.WithHelp("f/pgdn", "page down"),
 		),
 		HalfPageUp: key.NewBinding(
@@ -99,6 +100,7 @@ type Styles struct {
 	Header   lipgloss.Style
 	Cell     lipgloss.Style
 	Selected lipgloss.Style
+	Marked   lipgloss.Style
 }
 
 // DefaultStyles returns a set of default style definitions for this table.
@@ -107,6 +109,7 @@ func DefaultStyles() Styles {
 		Selected: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212")),
 		Header:   lipgloss.NewStyle().Bold(true).Padding(0, 1),
 		Cell:     lipgloss.NewStyle().Padding(0, 1),
+		Marked:   lipgloss.NewStyle().Foreground(lipgloss.Color("42")),
 	}
 }
 
@@ -126,6 +129,7 @@ func New(opts ...Option) Model {
 	m := Model{
 		cursor:   0,
 		viewport: viewport.New(0, 20),
+		selected: make(map[int]struct{}),
 
 		KeyMap: DefaultKeyMap(),
 		styles: DefaultStyles(),
@@ -283,9 +287,10 @@ func (m Model) Rows() []Row {
 	return m.rows
 }
 
-// SetRows sets a new rows state.
+// SetRows sets a new rows state and clears any selection.
 func (m *Model) SetRows(r []Row) {
 	m.rows = r
+	m.ClearSelection()
 	m.UpdateViewport()
 }
 
@@ -370,6 +375,45 @@ func (m *Model) GotoBottom() {
 	m.MoveDown(len(m.rows))
 }
 
+// ToggleSelect toggles whether a row is in the selection set.
+func (m *Model) ToggleSelect(row int) {
+	if row < 0 || row >= len(m.rows) {
+		return
+	}
+	if _, ok := m.selected[row]; ok {
+		delete(m.selected, row)
+	} else {
+		m.selected[row] = struct{}{}
+	}
+	m.UpdateViewport()
+}
+
+// IsSelected returns true if the given row index is selected.
+func (m Model) IsSelected(row int) bool {
+	_, ok := m.selected[row]
+	return ok
+}
+
+// SelectedIndices returns the selected row indices in ascending order.
+func (m Model) SelectedIndices() []int {
+	indices := make([]int, 0, len(m.selected))
+	for i := range m.selected {
+		indices = append(indices, i)
+	}
+	sort.Ints(indices)
+	return indices
+}
+
+// SelectionCount returns the number of selected rows.
+func (m Model) SelectionCount() int {
+	return len(m.selected)
+}
+
+// ClearSelection removes all rows from the selection set.
+func (m *Model) ClearSelection() {
+	m.selected = make(map[int]struct{})
+}
+
 // FromValues create the table rows from a simple string. It uses `\n` by
 // default for getting all the rows and the given separator for the fields on
 // each row.
@@ -398,24 +442,36 @@ func (m Model) headersView() string {
 }
 
 func (m *Model) renderRow(rowID int) string {
-	isSelected := rowID == m.cursor
+	isCursor := rowID == m.cursor
+	isMarked := m.IsSelected(rowID)
+
 	var s = make([]string, 0, len(m.cols))
 	for i, value := range m.rows[rowID] {
-		style := lipgloss.NewStyle().Width(m.cols[i].Width).MaxWidth(m.cols[i].Width).Inline(true)
-		// Use ANSI-aware truncation for cell values (may contain escape codes)
-		truncated := truncate.StringWithTail(value, uint(m.cols[i].Width), "…")
-		// Strip ANSI codes for selected row to allow selection background to show
-		if isSelected {
-			truncated = ansiRegex.ReplaceAllString(truncated, "")
+		colWidth := m.cols[i].Width
+
+		// Strip ANSI codes for cursor/marked rows so style backgrounds show cleanly
+		if isCursor || isMarked {
+			value = ansiRegex.ReplaceAllString(value, "")
 		}
+
+		// Prepend ✓ marker in first column for marked rows (within column width)
+		if isMarked && i == 0 {
+			value = "✓ " + value
+		}
+
+		style := lipgloss.NewStyle().Width(colWidth).MaxWidth(colWidth).Inline(true)
+		truncated := truncate.StringWithTail(value, uint(colWidth), "…")
 		renderedCell := m.styles.Cell.Render(style.Render(truncated))
 		s = append(s, renderedCell)
 	}
 
 	row := lipgloss.JoinHorizontal(lipgloss.Left, s...)
 
-	if isSelected {
+	if isCursor {
 		return m.styles.Selected.Render(row)
+	}
+	if isMarked {
+		return m.styles.Marked.Render(row)
 	}
 
 	return row

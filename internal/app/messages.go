@@ -27,8 +27,10 @@ const (
 )
 
 var (
-	nextPageKey = key.NewBinding(key.WithKeys("ctrl+n"))
-	prevPageKey = key.NewBinding(key.WithKeys("ctrl+p"))
+	nextPageKey     = key.NewBinding(key.WithKeys("ctrl+n"))
+	prevPageKey     = key.NewBinding(key.WithKeys("ctrl+p"))
+	toggleSelectKey = key.NewBinding(key.WithKeys(" "))
+	resendKey       = key.NewBinding(key.WithKeys("R"))
 )
 
 type MessagesModel struct {
@@ -60,6 +62,18 @@ type messageCountMsg struct {
 	Count int64 // -1 if unknown/error
 }
 
+type ResendRequestedMsg struct {
+	Messages    []azure.MessageInfo
+	Destination string // topic or queue name
+}
+
+type ResendProgressMsg struct {
+	Sent  int
+	Total int
+	Err   error
+	Done  bool
+}
+
 func NewMessagesModel(client *azure.ServiceBusClient) *MessagesModel {
 	s := spinner.New()
 	s.Spinner = spinner.MiniDot
@@ -89,6 +103,10 @@ func NewMessagesModel(client *azure.ServiceBusClient) *MessagesModel {
 		Foreground(lipgloss.Color("229")).
 		Background(lipgloss.Color("57")).
 		Bold(false)
+	tableStyle.Marked = tableStyle.Marked.
+		Foreground(lipgloss.Color("42")).
+		Background(lipgloss.Color("236")).
+		Bold(false)
 	t.SetStyles(tableStyle)
 
 	return &MessagesModel{
@@ -110,6 +128,19 @@ func (m *MessagesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if !m.isEmpty && !m.isLoading {
+			// Selection and resend
+			switch {
+			case key.Matches(msg, toggleSelectKey):
+				m.table.ToggleSelect(m.table.Cursor())
+				m.table.MoveDown(1)
+				return m, nil
+			case key.Matches(msg, resendKey):
+				if cmd := m.requestResend(); cmd != nil {
+					return m, cmd
+				}
+				return m, nil
+			}
+
 			// Explicit page navigation shortcuts
 			switch {
 			case key.Matches(msg, nextPageKey):
@@ -265,6 +296,38 @@ func (m *MessagesModel) SelectedMessage() *azure.MessageInfo {
 	return nil
 }
 
+func (m *MessagesModel) SelectedMessages() []azure.MessageInfo {
+	indices := m.table.SelectedIndices()
+	msgs := make([]azure.MessageInfo, 0, len(indices))
+	for _, i := range indices {
+		if i < len(m.messages) {
+			msgs = append(msgs, m.messages[i])
+		}
+	}
+	return msgs
+}
+
+func (m *MessagesModel) requestResend() tea.Cmd {
+	msgs := m.SelectedMessages()
+	if len(msgs) == 0 {
+		return nil
+	}
+	dest := extractDestination(m.entityName)
+	return func() tea.Msg {
+		return ResendRequestedMsg{
+			Messages:    msgs,
+			Destination: dest,
+		}
+	}
+}
+
+func extractDestination(entityName string) string {
+	if parts := strings.SplitN(entityName, "/", 2); len(parts) == 2 {
+		return parts[0]
+	}
+	return entityName
+}
+
 func (m *MessagesModel) updateColumnWidths() {
 	if m.width <= 0 {
 		return
@@ -336,10 +399,17 @@ func (m *MessagesModel) ViewContent() string {
 
 	tableView := m.table.View()
 
-	// Page indicator
-	pageInfo := m.buildPageIndicator()
-	if pageInfo != "" {
-		tableView += "\n" + pageInfo
+	// Status line: selection count + page indicator
+	var statusParts []string
+	if selCount := m.table.SelectionCount(); selCount > 0 {
+		statusParts = append(statusParts, styles.Selected.Render(fmt.Sprintf("%d selected", selCount)))
+	}
+	if pageInfo := m.buildPageIndicator(); pageInfo != "" {
+		statusParts = append(statusParts, pageInfo)
+	}
+
+	if len(statusParts) > 0 {
+		tableView += "\n" + strings.Join(statusParts, "  ")
 	}
 
 	return tableView

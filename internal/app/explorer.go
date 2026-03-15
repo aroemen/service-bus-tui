@@ -22,12 +22,14 @@ type ExplorerModel struct {
 	namespace     *NamespaceModel
 	messages      *MessagesModel
 	detail        *MessageDetailModel
+	client        *azure.ServiceBusClient
 	activePane    Pane
 	width         int
 	height        int
 	namespaceName string
 	prevCursor    int
 	showHelp      bool
+	resendOverlay *ResendOverlayModel
 }
 
 func NewExplorerModel(namespaceName string, client *azure.ServiceBusClient) *ExplorerModel {
@@ -35,6 +37,7 @@ func NewExplorerModel(namespaceName string, client *azure.ServiceBusClient) *Exp
 		namespace:     NewNamespaceModel(namespaceName, client),
 		messages:      NewMessagesModel(client),
 		detail:        NewMessageDetailModel(),
+		client:        client,
 		activePane:    PaneNamespace,
 		namespaceName: namespaceName,
 		prevCursor:    -1,
@@ -51,6 +54,25 @@ func (m *ExplorerModel) Init() tea.Cmd {
 func (m *ExplorerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
+	if m.resendOverlay != nil {
+		switch msg := msg.(type) {
+		case ResendDismissedMsg:
+			m.resendOverlay = nil
+			return m, nil
+		case ResendProgressMsg:
+			cmd := m.resendOverlay.Update(msg)
+			cmds = append(cmds, cmd)
+			return m, tea.Batch(cmds...)
+		case tea.KeyMsg:
+			cmd := m.resendOverlay.Update(msg)
+			cmds = append(cmds, cmd)
+			return m, tea.Batch(cmds...)
+		default:
+			cmd := m.resendOverlay.Update(msg)
+			cmds = append(cmds, cmd)
+		}
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -66,6 +88,10 @@ func (m *ExplorerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detail.SetSize(m.detailWidth()-2, m.contentHeight())
 
 	case tea.KeyMsg:
+		if m.resendOverlay != nil {
+			return m, tea.Batch(cmds...)
+		}
+
 		// Help panel toggle
 		if msg.String() == "?" {
 			m.showHelp = !m.showHelp
@@ -101,6 +127,12 @@ func (m *ExplorerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case PaneDetail:
 			m.detail.Update(msg)
 		}
+
+	case ResendRequestedMsg:
+		overlay := NewResendOverlayModel(msg.Messages, msg.Destination, m.client)
+		m.resendOverlay = overlay
+		cmds = append(cmds, overlay.Init())
+		return m, tea.Batch(cmds...)
 
 	case MessagesSelectedMsg:
 		cmd := m.messages.LoadMessages(msg.EntityName, msg.IsDeadLetter)
@@ -230,10 +262,25 @@ func (m *ExplorerModel) View() string {
 	s.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, leftPane, middlePane, rightPane))
 	s.WriteString("\n")
 
-	s.WriteString(styles.Subtle.Render("tab: switch pane • ↑↓/jk: navigate • ?: help • ctrl+c: quit"))
+	s.WriteString(m.footerHints())
 	s.WriteString("\n")
 
-	return s.String()
+	view := s.String()
+
+	// Composite resend overlay on top of the explorer view
+	if m.resendOverlay != nil {
+		return m.resendOverlay.View(m.width, m.height)
+	}
+
+	return view
+}
+
+func (m *ExplorerModel) footerHints() string {
+	base := "tab: switch pane • ↑↓/jk: navigate • ?: help • ctrl+c: quit"
+	if m.activePane == PaneMessages && !m.messages.isEmpty {
+		base = "tab: switch pane • space: select • R: resend • ?: help • ctrl+c: quit"
+	}
+	return styles.Subtle.Render(base)
 }
 
 func (m *ExplorerModel) contentHeight() int {

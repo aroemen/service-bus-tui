@@ -18,6 +18,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus"
 	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus/admin"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/servicebus/armservicebus"
+	"github.com/google/uuid"
 )
 
 const (
@@ -481,4 +482,63 @@ func (sbc *ServiceBusClient) GetMessageCount(ctx context.Context, entityName str
 		return int64(resp.DeadLetterMessageCount), nil
 	}
 	return int64(resp.ActiveMessageCount), nil
+}
+
+// SendProgress reports the status of a batch send operation.
+type SendProgress struct {
+	Sent  int
+	Total int
+	Err   error
+	Done  bool
+}
+
+func (sbc *ServiceBusClient) SendMessages(ctx context.Context, destination string, messages []MessageInfo, preserveIDs bool) <-chan SendProgress {
+	ch := make(chan SendProgress, 1)
+	total := len(messages)
+
+	go func() {
+		defer close(ch)
+
+		sender, err := sbc.client.NewSender(destination, nil)
+		if err != nil {
+			ch <- SendProgress{Total: total, Err: fmt.Errorf("failed to create sender: %w", err), Done: true}
+			return
+		}
+		defer sender.Close(ctx)
+
+		for i, msg := range messages {
+			sbMsg := &azservicebus.Message{
+				Body:                  []byte(msg.Body),
+				ApplicationProperties: msg.Properties,
+			}
+
+			if msg.Subject != "" {
+				s := msg.Subject
+				sbMsg.Subject = &s
+			}
+			if msg.ContentType != "" {
+				ct := msg.ContentType
+				sbMsg.ContentType = &ct
+			}
+
+			if preserveIDs {
+				id := msg.MessageID
+				sbMsg.MessageID = &id
+			} else {
+				id := uuid.NewString()
+				sbMsg.MessageID = &id
+			}
+
+			if err := sender.SendMessage(ctx, sbMsg, nil); err != nil {
+				ch <- SendProgress{Sent: i, Total: total, Err: fmt.Errorf("failed to send message %d/%d: %w", i+1, total, err), Done: true}
+				return
+			}
+
+			ch <- SendProgress{Sent: i + 1, Total: total}
+		}
+
+		ch <- SendProgress{Sent: total, Total: total, Done: true}
+	}()
+
+	return ch
 }
