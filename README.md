@@ -64,6 +64,12 @@ brew tap monsieurtib/tap
 brew install service-bus-tui
 ```
 
+### Winget (Windows)
+
+```powershell
+winget install MonsieurTib.service-bus-tui
+```
+
 ### Go Install
 
 ```bash
