@@ -1,3 +1,4 @@
+[![Go Report Card](https://goreportcard.com/badge/github.com/MonsieurTib/service-bus-tui)](https://goreportcard.com/report/github.com/MonsieurTib/service-bus-tui)
 # service-bus-tui
 
 A terminal-based explorer for Azure Service Bus.
