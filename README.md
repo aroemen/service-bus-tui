@@ -1,4 +1,6 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/MonsieurTib/service-bus-tui)](https://goreportcard.com/report/github.com/MonsieurTib/service-bus-tui)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=MonsieurTib_service-bus-tui&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=MonsieurTib_service-bus-tui)
+
 # service-bus-tui
 
 A terminal-based explorer for Azure Service Bus.
