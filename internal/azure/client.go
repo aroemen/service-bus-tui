@@ -27,12 +27,30 @@ const (
 	azureAPIVersion               = "2020-01-01"
 	azureManagementURL            = "https://management.azure.com"
 	azureManagementScope          = "https://management.azure.com/.default"
+	emulatorAdminPort             = 5300
 )
+
+// httpOnlyTransport forces HTTP (no TLS) for the emulator admin API.
+// The emulator exposes its management endpoint over plain HTTP on port 5300,
+// but the SDK defaults to HTTPS. This is the official workaround from
+// https://github.com/Azure/azure-service-bus-emulator-installer/blob/main/Sample-Code-Snippets/Go
+type httpOnlyTransport struct {
+	inner *http.Client
+}
+
+func (t *httpOnlyTransport) Do(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	u := *clone.URL
+	u.Scheme = "http"
+	clone.URL = &u
+	return t.inner.Do(clone)
+}
 
 type ServiceBusClient struct {
 	client      *azservicebus.Client
 	adminClient *admin.Client
 	namespace   string
+	isEmulator  bool
 }
 
 func (sbc *ServiceBusClient) GetNamespace() string {
@@ -101,7 +119,21 @@ func NewServiceBusClientFromConnectionString(connectionString string) (*ServiceB
 		return nil, fmt.Errorf("failed to create service bus client from connection string: %w", err)
 	}
 
-	adminClient, err := admin.NewClientFromConnectionString(connectionString, nil)
+	emulator := isEmulatorConnectionString(connectionString)
+
+	var adminOpts *admin.ClientOptions
+	adminConnStr := connectionString
+
+	if emulator {
+		adminConnStr = injectAdminPort(connectionString, emulatorAdminPort)
+		adminOpts = &admin.ClientOptions{
+			ClientOptions: azcore.ClientOptions{
+				Transport: &httpOnlyTransport{inner: http.DefaultClient},
+			},
+		}
+	}
+
+	adminClient, err := admin.NewClientFromConnectionString(adminConnStr, adminOpts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create admin client from connection string: %w", err)
 	}
@@ -112,6 +144,7 @@ func NewServiceBusClientFromConnectionString(connectionString string) (*ServiceB
 		client:      client,
 		adminClient: adminClient,
 		namespace:   namespace,
+		isEmulator:  emulator,
 	}, nil
 }
 
@@ -122,6 +155,10 @@ func parseNamespaceFromConnectionString(connectionString string) string {
 			endpoint := part[len("endpoint="):]
 			endpoint = strings.TrimPrefix(endpoint, "sb://")
 			endpoint = strings.TrimSuffix(endpoint, "/")
+			// Strip port if present (e.g. "localhost:5672" -> "localhost")
+			if idx := strings.Index(endpoint, ":"); idx > 0 {
+				endpoint = endpoint[:idx]
+			}
 			if idx := strings.Index(endpoint, "."); idx > 0 {
 				return endpoint[:idx]
 			}
@@ -129,6 +166,46 @@ func parseNamespaceFromConnectionString(connectionString string) string {
 		}
 	}
 	return ""
+}
+
+func isEmulatorConnectionString(connStr string) bool {
+	for part := range strings.SplitSeq(connStr, ";") {
+		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
+		if len(kv) == 2 && strings.EqualFold(kv[0], "UseDevelopmentEmulator") {
+			return strings.EqualFold(kv[1], "true")
+		}
+	}
+	return false
+}
+
+// injectAdminPort rewrites the Endpoint in a connection string to use the
+// given port. The emulator admin API listens on a different port (5300) than
+// the AMQP broker (5672).
+func injectAdminPort(connStr string, port int) string {
+	var parts []string
+	for part := range strings.SplitSeq(connStr, ";") {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(trimmed), "endpoint=") {
+			endpoint := trimmed[len("endpoint="):]
+			endpoint = strings.TrimSuffix(endpoint, "/")
+			// Strip existing port if any
+			scheme := ""
+			if strings.HasPrefix(endpoint, "sb://") {
+				scheme = "sb://"
+				endpoint = endpoint[len("sb://"):]
+			}
+			if idx := strings.Index(endpoint, ":"); idx > 0 {
+				endpoint = endpoint[:idx]
+			}
+			parts = append(parts, fmt.Sprintf("Endpoint=%s%s:%d", scheme, endpoint, port))
+		} else {
+			parts = append(parts, trimmed)
+		}
+	}
+	return strings.Join(parts, ";")
 }
 
 func newInteractiveBrowserCredential() (azcore.TokenCredential, error) {
@@ -464,7 +541,7 @@ func (sbc *ServiceBusClient) PeekMessages(ctx context.Context, entityName string
 	return result, nil
 }
 
-func (sbc *ServiceBusClient) GetMessageCount(ctx context.Context, entityName string, isDeadLetter bool) (int64, error) {
+func (sbc *ServiceBusClient) GetMessageCount(ctx context.Context, entityName string, isDeadLetter bool) (count int64, err error) {
 	parts := strings.SplitN(entityName, "/", 2)
 	if len(parts) != 2 {
 		return -1, fmt.Errorf("invalid entity name format: %s (expected 'topic/subscription')", entityName)
@@ -472,6 +549,17 @@ func (sbc *ServiceBusClient) GetMessageCount(ctx context.Context, entityName str
 
 	topicName := parts[0]
 	subscriptionName := parts[1]
+
+	// The emulator returns incomplete runtime properties (nil MessageCount etc.)
+	// which causes the SDK to panic with a nil pointer dereference. Recover
+	// gracefully — message count is non-critical (used for page indicators only).
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[GetMessageCount] recovered from panic: %v", r)
+			count = -1
+			err = nil
+		}
+	}()
 
 	resp, err := sbc.adminClient.GetSubscriptionRuntimeProperties(ctx, topicName, subscriptionName, nil)
 	if err != nil {
@@ -484,7 +572,6 @@ func (sbc *ServiceBusClient) GetMessageCount(ctx context.Context, entityName str
 	return int64(resp.ActiveMessageCount), nil
 }
 
-// SendProgress reports the status of a batch send operation.
 type SendProgress struct {
 	Sent  int
 	Total int

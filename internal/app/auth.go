@@ -15,7 +15,8 @@ import (
 )
 
 const (
-	authContextTimeout = 30 * time.Second
+	authContextTimeout       = 30 * time.Second
+	emulatorConnectionString = "Endpoint=sb://localhost;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true"
 )
 
 type CredentialType int
@@ -25,6 +26,7 @@ const (
 	InteractiveBrowser
 	ServicePrincipal
 	ConnectionString
+	Emulator
 )
 
 type AuthModel struct {
@@ -78,11 +80,13 @@ func NewAuthModel() *AuthModel {
 			"Interactive Browser",
 			"Service Principal",
 			"Connection String",
+			"Emulator (localhost)",
 		},
 		credentialTypes: []CredentialType{
 			InteractiveBrowser,
 			ServicePrincipal,
 			ConnectionString,
+			Emulator,
 		},
 		selectedAuth:           0,
 		connectionStringInput:  ti,
@@ -212,6 +216,10 @@ func (m *AuthModel) updateAuthSelection(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "enter":
 		m.errMsg = ""
+		if m.selectedCredentialType() == Emulator {
+			m.isAuthenticating = true
+			return m, tea.Batch(m.spinner.Tick, m.connectWithConnectionStringCmd(emulatorConnectionString))
+		}
 		if m.selectedCredentialType() == ConnectionString {
 			m.inConnectionStringMode = true
 			m.connectionStringInput.Focus()
