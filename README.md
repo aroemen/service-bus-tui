@@ -13,10 +13,9 @@ A terminal-based explorer for Azure Service Bus.
 ### Authentication
 - Azure CLI authentication (uses existing `az login` session)
 - Interactive browser authentication
-- Connection string
-  
-Planned authentication methods:
 - Service principal (client ID / client secret)
+- Connection string
+- Emulator (one-click connect to local Service Bus emulator)
 
 ### Namespace Discovery
 - Automatically lists all Service Bus namespaces across your Azure subscriptions
@@ -26,10 +25,11 @@ Planned authentication methods:
 - Tree-based navigation of namespaces
 - List topics and queues
 - Expand topics to view subscriptions
-- View active messages and dead-letter queue (DLQ) messages per subscription
+- Expand queues to view active and DLQ messages
+- View active messages and dead-letter queue (DLQ) messages per subscription or queue
 
 ### Message Viewing
-- Peek messages from subscriptions (active and DLQ)
+- Peek messages from subscriptions and queues (active and DLQ)
 - Tabular display with sequence number, message ID, subject, enqueued time, and body preview
 - JSON body formatting in preview
 - Paginated browsing (100 messages per page) with automatic page detection at boundaries
@@ -83,8 +83,15 @@ service-bus-tui
 
 Select an authentication method, choose a namespace, and browse your Service Bus resources.
 
+## Emulator Support
+
+Supports the [Azure Service Bus emulator](https://learn.microsoft.com/en-us/azure/service-bus-messaging/overview-emulator) running in Docker. Select **Emulator (localhost)** from the auth menu for default port.
+
+**Limitation**: Total message count is unavailable (SDK bug) — page indicator shows "?" but pagination works normally.
+
 ## Requirements
 
-- Go 1.21+
-- Azure subscription with Service Bus namespaces
+- Go 1.24+
+- Azure subscription with Service Bus namespaces (or the local emulator)
 - For Azure CLI auth: `az login` must be completed beforehand
+- For Emulator: Docker with the [Service Bus emulator](https://github.com/Azure/azure-service-bus-emulator-installer) running
