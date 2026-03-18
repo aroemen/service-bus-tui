@@ -271,7 +271,12 @@ func (n *NamespaceModel) drawNodeLine(s *strings.Builder, node *TreeNode, isSele
 			icon = "›"
 		}
 	case NodeTypeQueue:
-		icon = "□"
+		if node.IsExpanded {
+			icon = "⌄"
+		} else {
+			icon = "›"
+		}
+
 	case NodeTypeSubscription:
 		if node.IsExpanded {
 			icon = "⌄"
@@ -285,7 +290,7 @@ func (n *NamespaceModel) drawNodeLine(s *strings.Builder, node *TreeNode, isSele
 	}
 
 	var display string
-	if node.Type == NodeTypeSubscription || node.Type == NodeTypeMessages {
+	if node.Type == NodeTypeSubscription || node.Type == NodeTypeMessages || (node.Type == NodeTypeQueue && node.Depth > 0) {
 		display = fmt.Sprintf("%s  %s %s", indent, icon, node.Name)
 	} else {
 		display = fmt.Sprintf("%s%s %s", indent, icon, node.Name)
@@ -445,9 +450,29 @@ func (n *NamespaceModel) loadTopicsAndQueuesCmd() tea.Cmd {
 				ID:          fmt.Sprintf("queue-%s", queue),
 				Name:        queue,
 				Type:        NodeTypeQueue,
-				HasChildren: false,
-				Children:    []*TreeNode{},
-				Depth:       0,
+				HasChildren: true,
+				EntityName:  queue,
+				Children: []*TreeNode{
+					{
+						ID:          fmt.Sprintf("queue-%s-active", queue),
+						Name:        "Active Messages",
+						Type:        NodeTypeMessages,
+						EntityName:  queue,
+						HasChildren: false,
+						Children:    []*TreeNode{},
+						Depth:       1,
+					},
+					{
+						ID:          fmt.Sprintf("queue-%s-dlq", queue),
+						Name:        "DLQ Messages",
+						Type:        NodeTypeMessages,
+						EntityName:  queue,
+						HasChildren: false,
+						Children:    []*TreeNode{},
+						Depth:       1,
+					},
+				},
+				Depth: 0,
 			})
 		}
 

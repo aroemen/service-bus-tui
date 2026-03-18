@@ -467,31 +467,21 @@ func (sbc *ServiceBusClient) ListSubscriptions(ctx context.Context, topicName st
 }
 
 func (sbc *ServiceBusClient) PeekMessages(ctx context.Context, entityName string, isDeadLetter bool, maxMessages int, fromSequenceNumber *int64) ([]MessageInfo, error) {
-	// entityName format: "topic/subscription" or "queue"
-	parts := strings.SplitN(entityName, "/", 2)
-	if len(parts) != 2 {
-		return nil, fmt.Errorf("invalid entity name format: %s (expected 'topic/subscription')", entityName)
-	}
-	topicName := parts[0]
-	subscriptionName := parts[1]
-
 	var receiver *azservicebus.Receiver
 	var err error
 
+	var opts *azservicebus.ReceiverOptions
 	if isDeadLetter {
-		receiver, err = sbc.client.NewReceiverForSubscription(
-			topicName,
-			subscriptionName,
-			&azservicebus.ReceiverOptions{
-				SubQueue: azservicebus.SubQueueDeadLetter,
-			},
-		)
+		opts = &azservicebus.ReceiverOptions{
+			SubQueue: azservicebus.SubQueueDeadLetter,
+		}
+	}
+
+	// entityName format: "topic/subscription" (contains /) or "queue" (no /)
+	if parts := strings.SplitN(entityName, "/", 2); len(parts) == 2 {
+		receiver, err = sbc.client.NewReceiverForSubscription(parts[0], parts[1], opts)
 	} else {
-		receiver, err = sbc.client.NewReceiverForSubscription(
-			topicName,
-			subscriptionName,
-			nil,
-		)
+		receiver, err = sbc.client.NewReceiverForQueue(entityName, opts)
 	}
 
 	if err != nil {
@@ -542,14 +532,6 @@ func (sbc *ServiceBusClient) PeekMessages(ctx context.Context, entityName string
 }
 
 func (sbc *ServiceBusClient) GetMessageCount(ctx context.Context, entityName string, isDeadLetter bool) (count int64, err error) {
-	parts := strings.SplitN(entityName, "/", 2)
-	if len(parts) != 2 {
-		return -1, fmt.Errorf("invalid entity name format: %s (expected 'topic/subscription')", entityName)
-	}
-
-	topicName := parts[0]
-	subscriptionName := parts[1]
-
 	// The emulator returns incomplete runtime properties (nil MessageCount etc.)
 	// which causes the SDK to panic with a nil pointer dereference. Recover
 	// gracefully — message count is non-critical (used for page indicators only).
@@ -561,11 +543,22 @@ func (sbc *ServiceBusClient) GetMessageCount(ctx context.Context, entityName str
 		}
 	}()
 
-	resp, err := sbc.adminClient.GetSubscriptionRuntimeProperties(ctx, topicName, subscriptionName, nil)
+	// entityName format: "topic/subscription" (contains /) or "queue" (no /)
+	if parts := strings.SplitN(entityName, "/", 2); len(parts) == 2 {
+		resp, err := sbc.adminClient.GetSubscriptionRuntimeProperties(ctx, parts[0], parts[1], nil)
+		if err != nil {
+			return -1, err
+		}
+		if isDeadLetter {
+			return int64(resp.DeadLetterMessageCount), nil
+		}
+		return int64(resp.ActiveMessageCount), nil
+	}
+
+	resp, err := sbc.adminClient.GetQueueRuntimeProperties(ctx, entityName, nil)
 	if err != nil {
 		return -1, err
 	}
-
 	if isDeadLetter {
 		return int64(resp.DeadLetterMessageCount), nil
 	}
