@@ -30,6 +30,7 @@ type ExplorerModel struct {
 	prevCursor    int
 	showHelp      bool
 	resendOverlay *ResendOverlayModel
+	sendOverlay   *SendOverlayModel
 }
 
 func NewExplorerModel(namespaceName string, client *azure.ServiceBusClient) *ExplorerModel {
@@ -53,6 +54,21 @@ func (m *ExplorerModel) Init() tea.Cmd {
 
 func (m *ExplorerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+
+	if m.sendOverlay != nil {
+		switch msg := msg.(type) {
+		case SendDismissedMsg:
+			m.sendOverlay = nil
+			return m, nil
+		case tea.KeyMsg:
+			cmd := m.sendOverlay.Update(msg)
+			cmds = append(cmds, cmd)
+			return m, tea.Batch(cmds...)
+		default:
+			cmd := m.sendOverlay.Update(msg)
+			cmds = append(cmds, cmd)
+		}
+	}
 
 	if m.resendOverlay != nil {
 		switch msg := msg.(type) {
@@ -131,6 +147,12 @@ func (m *ExplorerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ResendRequestedMsg:
 		overlay := NewResendOverlayModel(msg.Messages, msg.Destination, m.client)
 		m.resendOverlay = overlay
+		cmds = append(cmds, overlay.Init())
+		return m, tea.Batch(cmds...)
+
+	case SendRequestedMsg:
+		overlay := NewSendOverlayModel(msg.Destination, m.client)
+		m.sendOverlay = overlay
 		cmds = append(cmds, overlay.Init())
 		return m, tea.Batch(cmds...)
 
@@ -271,12 +293,18 @@ func (m *ExplorerModel) View() string {
 	if m.resendOverlay != nil {
 		return m.resendOverlay.View(m.width, m.height)
 	}
+	if m.sendOverlay != nil {
+		return m.sendOverlay.View(m.width, m.height)
+	}
 
 	return view
 }
 
 func (m *ExplorerModel) footerHints() string {
 	base := "tab: switch pane • ↑↓/jk: navigate • ?: help • ctrl+c: quit"
+	if m.activePane == PaneNamespace {
+		base = "tab: switch pane • ↑↓/jk: navigate • S: send • ?: help • ctrl+c: quit"
+	}
 	if m.activePane == PaneMessages && !m.messages.isEmpty {
 		base = "tab: switch pane • space: select • R: resend • ?: help • ctrl+c: quit"
 	}

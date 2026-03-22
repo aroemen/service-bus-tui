@@ -42,6 +42,7 @@ func helpSections() []helpSection {
 			bindings: []helpBinding{
 				{"right/l/enter", "Expand / select"},
 				{"left/h", "Collapse"},
+				{"S", "Send to topic/queue"},
 			},
 		},
 		{

@@ -44,12 +44,18 @@ A terminal-based explorer for Azure Service Bus.
 - Option to keep original or generate new Message IDs
 - Real-time progress tracking
 
+### Message Sending
+- Send new messages directly to a topic or queue
+- Compose subject, content type, and body from an in-app modal form
+- Content type selection with built-in presets and custom value support
+
 ### Navigation
 - Keyboard-driven interface
 - `up/down` or `j/k`: Navigate items
 - `left/right` or `h/l` or `enter`: Expand/collapse nodes
 - `tab`: Switch between namespace tree and messages pane
 - `ctrl+n` / `ctrl+p`: Next/previous page of messages
+- `S`: Open send message modal from selected topic/queue
 - `space`: Select/deselect messages
 - `R`: Resend selected messages
 - `esc`: Go back

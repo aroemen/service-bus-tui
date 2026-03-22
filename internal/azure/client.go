@@ -68,6 +68,7 @@ type NamespaceInfo struct {
 // MessageInfo I choose "MessageInfo" instead of "Message" to avoid confusion/conflict with azservicebus package
 type MessageInfo struct {
 	MessageID      string
+	CorrelationID  string
 	SequenceNumber int64
 	Subject        string
 	Body           string
@@ -517,6 +518,10 @@ func (sbc *ServiceBusClient) PeekMessages(ctx context.Context, entityName string
 			pm.ContentType = *msg.ContentType
 		}
 
+		if msg.CorrelationID != nil {
+			pm.CorrelationID = *msg.CorrelationID
+		}
+
 		if msg.EnqueuedTime != nil {
 			pm.EnqueuedTime = *msg.EnqueuedTime
 		}
@@ -600,6 +605,10 @@ func (sbc *ServiceBusClient) SendMessages(ctx context.Context, destination strin
 				ct := msg.ContentType
 				sbMsg.ContentType = &ct
 			}
+			if msg.CorrelationID != "" {
+				cid := msg.CorrelationID
+				sbMsg.CorrelationID = &cid
+			}
 
 			if preserveIDs {
 				id := msg.MessageID
@@ -621,4 +630,44 @@ func (sbc *ServiceBusClient) SendMessages(ctx context.Context, destination strin
 	}()
 
 	return ch
+}
+
+func (sbc *ServiceBusClient) SendSingleMessage(ctx context.Context, destination string, message MessageInfo, generateID bool) error {
+	sender, err := sbc.client.NewSender(destination, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create sender: %w", err)
+	}
+	defer sender.Close(ctx)
+
+	sbMsg := &azservicebus.Message{
+		Body:                  []byte(message.Body),
+		ApplicationProperties: message.Properties,
+	}
+
+	if message.Subject != "" {
+		s := message.Subject
+		sbMsg.Subject = &s
+	}
+	if message.ContentType != "" {
+		ct := message.ContentType
+		sbMsg.ContentType = &ct
+	}
+	if message.CorrelationID != "" {
+		cid := message.CorrelationID
+		sbMsg.CorrelationID = &cid
+	}
+
+	if generateID || strings.TrimSpace(message.MessageID) == "" {
+		id := uuid.NewString()
+		sbMsg.MessageID = &id
+	} else {
+		id := message.MessageID
+		sbMsg.MessageID = &id
+	}
+
+	if err := sender.SendMessage(ctx, sbMsg, nil); err != nil {
+		return fmt.Errorf("failed to send message: %w", err)
+	}
+
+	return nil
 }

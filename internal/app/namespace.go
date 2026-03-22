@@ -94,6 +94,13 @@ func (n *NamespaceModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
+		case "S":
+			if n.selectedIdx >= 0 && n.selectedIdx < len(n.flatList) {
+				node := n.flatList[n.selectedIdx]
+				if sendMsg := n.createSendRequestedMsg(node); sendMsg != nil {
+					return n, func() tea.Msg { return *sendMsg }
+				}
+			}
 		case "up", "k":
 			if n.selectedIdx > 0 {
 				n.selectedIdx--
@@ -215,7 +222,7 @@ func (n *NamespaceModel) View() string {
 		s.WriteString(n.ViewContent())
 
 		s.WriteString("\n")
-		s.WriteString(styles.Subtle.Render("↑↓/jk: navigate • →/l/enter: expand • ←/h: collapse • ctrl+c: quit"))
+		s.WriteString(styles.Subtle.Render("↑↓/jk: navigate • →/l/enter: expand • ←/h: collapse • S: send • ctrl+c: quit"))
 		s.WriteString("\n")
 	}
 
@@ -413,6 +420,26 @@ func (n *NamespaceModel) createMessagesSelectedMsg(node *TreeNode) *MessagesSele
 		EntityName:   node.EntityName,
 		IsDeadLetter: isDeadLetter,
 	}
+}
+
+func (n *NamespaceModel) createSendRequestedMsg(node *TreeNode) *SendRequestedMsg {
+	if node == nil {
+		return nil
+	}
+
+	if node.Type != NodeTypeTopic && node.Type != NodeTypeQueue {
+		return nil
+	}
+
+	destination := node.EntityName
+	if destination == "" {
+		destination = node.Name
+	}
+	if destination == "" {
+		return nil
+	}
+
+	return &SendRequestedMsg{Destination: destination}
 }
 
 func (n *NamespaceModel) loadTopicsAndQueuesCmd() tea.Cmd {
