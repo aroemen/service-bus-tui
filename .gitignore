@@ -32,3 +32,6 @@ debug.log
 # Environment
 .env
 .env.local
+
+# Binary
+@service-bus-tui
