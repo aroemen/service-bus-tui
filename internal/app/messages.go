@@ -63,8 +63,9 @@ type messageCountMsg struct {
 }
 
 type ResendRequestedMsg struct {
-	Messages    []azure.MessageInfo
-	Destination string // topic or queue name
+	Messages        []azure.MessageInfo
+	Destination     string // topic or queue name
+	EditableMessage *azure.MessageInfo
 }
 
 type ResendProgressMsg struct {
@@ -310,13 +311,23 @@ func (m *MessagesModel) SelectedMessages() []azure.MessageInfo {
 func (m *MessagesModel) requestResend() tea.Cmd {
 	msgs := m.SelectedMessages()
 	if len(msgs) == 0 {
-		return nil
+		selected := m.SelectedMessage()
+		if selected == nil {
+			return nil
+		}
+		msgs = []azure.MessageInfo{*selected}
 	}
 	dest := extractDestination(m.entityName)
+	var editableMessage *azure.MessageInfo
+	if len(msgs) == 1 {
+		msg := msgs[0]
+		editableMessage = &msg
+	}
 	return func() tea.Msg {
 		return ResendRequestedMsg{
-			Messages:    msgs,
-			Destination: dest,
+			Messages:        msgs,
+			Destination:     dest,
+			EditableMessage: editableMessage,
 		}
 	}
 }

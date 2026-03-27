@@ -39,6 +39,8 @@ A terminal-based explorer for Azure Service Bus.
 
 ### Message Resending
 - Resend selected messages back to their source topic or queue
+- If nothing is selected, resend uses the currently highlighted row
+- Single-message resend opens editable send form prefilled with original message body/metadata
 - Works on both active and dead-letter messages (DLQ replay)
 - Multi-message selection support
 - Option to keep original or generate new Message IDs
@@ -57,7 +59,7 @@ A terminal-based explorer for Azure Service Bus.
 - `ctrl+n` / `ctrl+p`: Next/previous page of messages
 - `S`: Open send message modal from selected topic/queue
 - `space`: Select/deselect messages
-- `R`: Resend selected messages
+- `R`: Resend selected messages (or current row if none selected; single selection opens editable form)
 - `esc`: Go back
 - `ctrl+c`: Quit
 

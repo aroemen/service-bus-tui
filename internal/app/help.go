@@ -49,7 +49,7 @@ func helpSections() []helpSection {
 			title: "Messages",
 			bindings: []helpBinding{
 				{"space", "Toggle select"},
-				{"R", "Resend selected"},
+				{"R", "Resend sel/current (1=edit)"},
 				{"ctrl+n", "Next page"},
 				{"ctrl+p", "Previous page"},
 				{"f/pgdn", "Page down"},
