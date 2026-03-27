@@ -145,6 +145,12 @@ func (m *ExplorerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case ResendRequestedMsg:
+		if msg.EditableMessage != nil {
+			overlay := NewSendOverlayModelFromMessage(msg.Destination, m.client, *msg.EditableMessage)
+			m.sendOverlay = overlay
+			cmds = append(cmds, overlay.Init())
+			return m, tea.Batch(cmds...)
+		}
 		overlay := NewResendOverlayModel(msg.Messages, msg.Destination, m.client)
 		m.resendOverlay = overlay
 		cmds = append(cmds, overlay.Init())
@@ -306,7 +312,7 @@ func (m *ExplorerModel) footerHints() string {
 		base = "tab: switch pane • ↑↓/jk: navigate • S: send • ?: help • ctrl+c: quit"
 	}
 	if m.activePane == PaneMessages && !m.messages.isEmpty {
-		base = "tab: switch pane • space: select • R: resend • ?: help • ctrl+c: quit"
+		base = "tab: switch pane • space: select • R: resend/edit sel/current • ?: help • ctrl+c: quit"
 	}
 	return styles.Subtle.Render(base)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/MonsieurTib/service-bus-tui/internal/azure"
@@ -141,6 +142,58 @@ func NewSendOverlayModel(destination string, client *azure.ServiceBusClient) *Se
 	m.syncInputsFromSelectedProperty()
 	m.setFocusedField(fieldMessageID)
 	return m
+}
+
+func NewSendOverlayModelFromMessage(destination string, client *azure.ServiceBusClient, message azure.MessageInfo) *SendOverlayModel {
+	m := NewSendOverlayModel(destination, client)
+
+	m.messageIDInput.SetValue(strings.TrimSpace(message.MessageID))
+	m.correlationIDInput.SetValue(strings.TrimSpace(message.CorrelationID))
+	m.subjectInput.SetValue(strings.TrimSpace(message.Subject))
+	m.bodyInput.SetValue(message.Body)
+
+	contentType := strings.TrimSpace(message.ContentType)
+	switch contentType {
+	case "application/json":
+		m.selectedContentType = 0
+	case "text/plain":
+		m.selectedContentType = 1
+	case "":
+		m.selectedContentType = 0
+	default:
+		m.selectedContentType = 2
+		m.customTypeInput.SetValue(contentType)
+	}
+
+	m.properties = buildPropertyRows(message.Properties)
+	m.selectedPropertyRow = 0
+	m.selectedPropertyCol = 0
+	m.syncInputsFromSelectedProperty()
+	m.setFocusedField(fieldBody)
+
+	return m
+}
+
+func buildPropertyRows(properties map[string]any) []messageProperty {
+	if len(properties) == 0 {
+		return []messageProperty{{}}
+	}
+
+	keys := make([]string, 0, len(properties))
+	for key := range properties {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	rows := make([]messageProperty, 0, len(keys)+1)
+	for _, key := range keys {
+		rows = append(rows, messageProperty{
+			Key:   key,
+			Value: fmt.Sprint(properties[key]),
+		})
+	}
+
+	return append(rows, messageProperty{})
 }
 
 func (m *SendOverlayModel) Init() tea.Cmd {
