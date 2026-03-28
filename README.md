@@ -18,6 +18,8 @@ A terminal-based explorer for Azure Service Bus.
 - Interactive browser authentication
 - Service principal (client ID / client secret)
 - Connection string
+- Optional save prompt after connection-string login
+- Saved connection strings list with quick connect and delete
 - Emulator (one-click connect to local Service Bus emulator)
 
 ### Namespace Discovery
@@ -100,11 +102,21 @@ service-bus-tui
 
 Select an authentication method, choose a namespace, and browse your Service Bus resources.
 
+If you authenticate with a connection string, the app prompts you to optionally save it for later reuse.
+
 ## Emulator Support
 
 Supports the [Azure Service Bus emulator](https://learn.microsoft.com/en-us/azure/service-bus-messaging/overview-emulator) running in Docker. Select **Emulator (localhost)** from the auth menu for default port.
 
 **Limitation**: Total message count is unavailable (SDK bug) — page indicator shows "?" but pagination works normally.
+
+## Saved Connection Strings
+
+Saved connection strings are stored locally as plain JSON at:
+
+`~/.config/service-bus-tui/connections.json`
+
+The app writes this file with restrictive permissions (directory `0700`, file `0600`).
 
 ## Requirements
 

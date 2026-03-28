@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 const (
@@ -26,30 +27,49 @@ const (
 	InteractiveBrowser
 	ServicePrincipal
 	ConnectionString
+	SavedConnections
 	Emulator
 )
 
+type savePromptFocus int
+
+const (
+	savePromptFocusName savePromptFocus = iota
+	savePromptFocusSave
+	savePromptFocusSkip
+)
+
 type AuthModel struct {
-	selectedAuth           CredentialType
-	authOptions            []string
-	credentialTypes        []CredentialType
-	inNamespaceMode        bool
-	inConnectionStringMode bool
-	connectionStringInput  textinput.Model
-	inServicePrincipalMode bool
-	servicePrincipalInputs [4]textinput.Model
-	focusedSPInput         int
-	spTenantID             string
-	spClientID             string
-	spClientSecret         string
-	errMsg                 string
-	isAuthenticating       bool
-	namespaces             []azure.NamespaceInfo
-	selectedNamespaceIdx   int
-	authenticatedUser      string
-	spinner                spinner.Model
-	height                 int
-	scrollOffset           int
+	selectedAuth            CredentialType
+	authOptions             []string
+	credentialTypes         []CredentialType
+	inNamespaceMode         bool
+	inConnectionStringMode  bool
+	inSavedConnectionsMode  bool
+	inSaveConnectionPrompt  bool
+	connectionStringInput   textinput.Model
+	saveNameInput           textinput.Model
+	savePromptFocus         savePromptFocus
+	inServicePrincipalMode  bool
+	servicePrincipalInputs  [4]textinput.Model
+	focusedSPInput          int
+	store                   *ConnectionStore
+	savedConnections        []SavedConnection
+	selectedSavedIdx        int
+	pendingConnection       *NamespaceConnectedMsg
+	pendingConnectionString string
+	spTenantID              string
+	spClientID              string
+	spClientSecret          string
+	errMsg                  string
+	isAuthenticating        bool
+	namespaces              []azure.NamespaceInfo
+	selectedNamespaceIdx    int
+	authenticatedUser       string
+	spinner                 spinner.Model
+	width                   int
+	height                  int
+	scrollOffset            int
 }
 
 func NewAuthModel() *AuthModel {
@@ -61,6 +81,10 @@ func NewAuthModel() *AuthModel {
 	ti.EchoMode = textinput.EchoPassword
 	ti.EchoCharacter = '*'
 	ti.Width = 80
+
+	saveNameInput := textinput.New()
+	saveNameInput.Placeholder = "my-namespace"
+	saveNameInput.Width = 40
 
 	// Service Principal text inputs: Tenant ID, Client ID, Client Secret, Namespace (optional)
 	var spInputs [4]textinput.Model
@@ -76,36 +100,25 @@ func NewAuthModel() *AuthModel {
 	spInputs[3].Placeholder = "my-namespace"
 
 	m := &AuthModel{
-		authOptions: []string{
-			"Interactive Browser",
-			"Service Principal",
-			"Connection String",
-			"Emulator (localhost)",
-		},
-		credentialTypes: []CredentialType{
-			InteractiveBrowser,
-			ServicePrincipal,
-			ConnectionString,
-			Emulator,
-		},
+		store:                  NewConnectionStore(),
 		selectedAuth:           0,
 		connectionStringInput:  ti,
+		saveNameInput:          saveNameInput,
 		servicePrincipalInputs: spInputs,
 		spinner:                s,
+		width:                  100,
 		height:                 50,
 		scrollOffset:           0,
 	}
 
+	if saved, err := m.store.List(); err == nil {
+		m.savedConnections = saved
+	}
+	m.refreshAuthOptions()
+
 	if user, ok := azure.GetAzureCliAuthenticatedUser(); ok {
 		m.authenticatedUser = user
-		m.authOptions = append(
-			[]string{fmt.Sprintf("Azure CLI, authenticated as %s", user)},
-			m.authOptions...,
-		)
-		m.credentialTypes = append(
-			[]CredentialType{AzureCLI},
-			m.credentialTypes...,
-		)
+		m.refreshAuthOptions()
 		m.selectedAuth = 0
 	}
 
@@ -123,6 +136,58 @@ func (m *AuthModel) selectedCredentialType() CredentialType {
 	return m.credentialTypes[0]
 }
 
+func (m *AuthModel) refreshAuthOptions() {
+	authOptions := []string{
+		"Interactive Browser",
+		"Service Principal",
+		"Connection String",
+	}
+	credentialTypes := []CredentialType{
+		InteractiveBrowser,
+		ServicePrincipal,
+		ConnectionString,
+	}
+
+	if len(m.savedConnections) > 0 {
+		authOptions = append(authOptions, "Saved Connection Strings")
+		credentialTypes = append(credentialTypes, SavedConnections)
+	}
+
+	authOptions = append(authOptions, "Emulator (localhost)")
+	credentialTypes = append(credentialTypes, Emulator)
+
+	if m.authenticatedUser != "" {
+		authOptions = append(
+			[]string{fmt.Sprintf("Azure CLI, authenticated as %s", m.authenticatedUser)},
+			authOptions...,
+		)
+		credentialTypes = append([]CredentialType{AzureCLI}, credentialTypes...)
+	}
+
+	m.authOptions = authOptions
+	m.credentialTypes = credentialTypes
+	if len(m.authOptions) == 0 {
+		m.selectedAuth = 0
+		return
+	}
+	if int(m.selectedAuth) >= len(m.authOptions) {
+		m.selectedAuth = CredentialType(len(m.authOptions) - 1)
+	}
+}
+
+func (m *AuthModel) refreshSavedConnections() error {
+	saved, err := m.store.List()
+	if err != nil {
+		return err
+	}
+	m.savedConnections = saved
+	m.refreshAuthOptions()
+	if m.selectedSavedIdx >= len(m.savedConnections) {
+		m.selectedSavedIdx = max(0, len(m.savedConnections)-1)
+	}
+	return nil
+}
+
 func (m *AuthModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var spinnerCmd tea.Cmd
 	m.spinner, spinnerCmd = m.spinner.Update(msg)
@@ -133,6 +198,14 @@ func (m *AuthModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			return m, tea.Quit
 		case "esc":
+			if m.inSaveConnectionPrompt {
+				return m.skipPendingConnection()
+			}
+			if m.inSavedConnectionsMode {
+				m.inSavedConnectionsMode = false
+				m.errMsg = ""
+				return m, spinnerCmd
+			}
 			if m.inConnectionStringMode {
 				m.inConnectionStringMode = false
 				m.connectionStringInput.SetValue("")
@@ -157,7 +230,11 @@ func (m *AuthModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, spinnerCmd
 		}
 
-		if m.inConnectionStringMode {
+		if m.inSaveConnectionPrompt {
+			return m.updateSaveConnectionPrompt(msg)
+		} else if m.inSavedConnectionsMode {
+			return m.updateSavedConnections(msg)
+		} else if m.inConnectionStringMode {
 			return m.updateConnectionStringInput(msg)
 		} else if m.inServicePrincipalMode {
 			return m.updateServicePrincipalInput(msg)
@@ -168,6 +245,7 @@ func (m *AuthModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.WindowSizeMsg:
+		m.width = max(msg.Width, 20)
 		m.height = max(msg.Height-5, 5)
 
 	case NamespacesLoadedMsg:
@@ -182,6 +260,18 @@ func (m *AuthModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.errMsg = string(msg)
 		m.isAuthenticating = false
 		return m, spinnerCmd
+
+	case ConnectionStringConnectedMsg:
+		m.isAuthenticating = false
+		m.inSaveConnectionPrompt = true
+		m.savePromptFocus = savePromptFocusName
+		m.pendingConnectionString = msg.ConnectionString
+		m.pendingConnection = &NamespaceConnectedMsg{Namespace: msg.Namespace, Client: msg.Client}
+		defaultName := strings.TrimSpace(msg.Namespace)
+		m.saveNameInput.SetValue(defaultName)
+		m.saveNameInput.Focus()
+		m.errMsg = ""
+		return m, textinput.Blink
 	}
 
 	return m, spinnerCmd
@@ -220,6 +310,19 @@ func (m *AuthModel) updateAuthSelection(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.isAuthenticating = true
 			return m, tea.Batch(m.spinner.Tick, m.connectWithConnectionStringCmd(emulatorConnectionString))
 		}
+		if m.selectedCredentialType() == SavedConnections {
+			if err := m.refreshSavedConnections(); err != nil {
+				m.errMsg = err.Error()
+				return m, nil
+			}
+			if len(m.savedConnections) == 0 {
+				m.errMsg = "no saved connection strings"
+				return m, nil
+			}
+			m.inSavedConnectionsMode = true
+			m.selectedSavedIdx = 0
+			return m, nil
+		}
 		if m.selectedCredentialType() == ConnectionString {
 			m.inConnectionStringMode = true
 			m.connectionStringInput.Focus()
@@ -248,12 +351,141 @@ func (m *AuthModel) updateConnectionStringInput(msg tea.KeyMsg) (tea.Model, tea.
 		m.errMsg = ""
 		m.isAuthenticating = true
 		m.inConnectionStringMode = false
-		return m, tea.Batch(m.spinner.Tick, m.connectWithConnectionStringCmd(connStr))
+		return m, tea.Batch(m.spinner.Tick, m.connectWithConnectionStringAndPromptCmd(connStr))
 	default:
 		var cmd tea.Cmd
 		m.connectionStringInput, cmd = m.connectionStringInput.Update(msg)
 		return m, cmd
 	}
+}
+
+func (m *AuthModel) updateSavedConnections(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if len(m.savedConnections) == 0 {
+		m.inSavedConnectionsMode = false
+		m.refreshAuthOptions()
+		return m, nil
+	}
+
+	switch msg.String() {
+	case "up", "k":
+		if m.selectedSavedIdx > 0 {
+			m.selectedSavedIdx--
+		}
+	case "down", "j":
+		if m.selectedSavedIdx < len(m.savedConnections)-1 {
+			m.selectedSavedIdx++
+		}
+	case "enter":
+		entry := m.savedConnections[m.selectedSavedIdx]
+		m.inSavedConnectionsMode = false
+		m.isAuthenticating = true
+		m.errMsg = ""
+		return m, tea.Batch(m.spinner.Tick, m.connectWithConnectionStringCmd(entry.ConnectionString))
+	case "x", "delete":
+		entry := m.savedConnections[m.selectedSavedIdx]
+		if err := m.store.Delete(entry.ID); err != nil {
+			m.errMsg = fmt.Sprintf("failed to delete saved connection: %v", err)
+			return m, nil
+		}
+		if err := m.refreshSavedConnections(); err != nil {
+			m.errMsg = err.Error()
+			return m, nil
+		}
+		if len(m.savedConnections) == 0 {
+			m.inSavedConnectionsMode = false
+			m.errMsg = ""
+		}
+	}
+
+	return m, nil
+}
+
+func (m *AuthModel) updateSaveConnectionPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "tab":
+		m.moveSavePromptFocus(1)
+		return m, textinput.Blink
+	case "shift+tab":
+		m.moveSavePromptFocus(-1)
+		return m, textinput.Blink
+	case "left", "h":
+		if m.savePromptFocus == savePromptFocusSkip {
+			m.setSavePromptFocus(savePromptFocusSave)
+		}
+		return m, textinput.Blink
+	case "right", "l":
+		if m.savePromptFocus == savePromptFocusSave {
+			m.setSavePromptFocus(savePromptFocusSkip)
+		}
+		return m, textinput.Blink
+	case "enter":
+		switch m.savePromptFocus {
+		case savePromptFocusName:
+			m.setSavePromptFocus(savePromptFocusSave)
+			return m, textinput.Blink
+		case savePromptFocusSave:
+			if strings.TrimSpace(m.saveNameInput.Value()) == "" {
+				return m, nil
+			}
+			if _, err := m.store.Save(m.saveNameInput.Value(), m.pendingConnectionString); err != nil {
+				m.errMsg = fmt.Sprintf("failed to save connection string: %v", err)
+				return m, nil
+			}
+			if err := m.refreshSavedConnections(); err != nil {
+				m.errMsg = err.Error()
+				return m, nil
+			}
+			m.errMsg = ""
+			return m.finishPendingConnection()
+		case savePromptFocusSkip:
+			return m.skipPendingConnection()
+		}
+	default:
+		if m.savePromptFocus == savePromptFocusName {
+			var cmd tea.Cmd
+			m.saveNameInput, cmd = m.saveNameInput.Update(msg)
+			return m, cmd
+		}
+	}
+
+	return m, nil
+}
+
+func (m *AuthModel) moveSavePromptFocus(step int) {
+	next := int(m.savePromptFocus) + step
+	if next < 0 {
+		next = 2
+	}
+	if next > 2 {
+		next = 0
+	}
+	m.setSavePromptFocus(savePromptFocus(next))
+}
+
+func (m *AuthModel) setSavePromptFocus(focus savePromptFocus) {
+	m.savePromptFocus = focus
+	if focus == savePromptFocusName {
+		m.saveNameInput.Focus()
+	} else {
+		m.saveNameInput.Blur()
+	}
+}
+
+func (m *AuthModel) finishPendingConnection() (tea.Model, tea.Cmd) {
+	if m.pendingConnection == nil {
+		m.inSaveConnectionPrompt = false
+		return m, nil
+	}
+	connected := *m.pendingConnection
+	m.inSaveConnectionPrompt = false
+	m.pendingConnection = nil
+	m.pendingConnectionString = ""
+	m.saveNameInput.SetValue("")
+	return m, func() tea.Msg { return connected }
+}
+
+func (m *AuthModel) skipPendingConnection() (tea.Model, tea.Cmd) {
+	return m.finishPendingConnection()
 }
 
 func (m *AuthModel) updateServicePrincipalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -308,7 +540,9 @@ func (m *AuthModel) View() string {
 		s.WriteString(styles.Subtle.Render("Connecting..."))
 		s.WriteString("\n")
 	} else {
-		if m.inConnectionStringMode {
+		if m.inSavedConnectionsMode {
+			m.viewSavedConnections(&s)
+		} else if m.inConnectionStringMode {
 			m.viewConnectionStringInput(&s)
 		} else if m.inServicePrincipalMode {
 			m.viewServicePrincipalInput(&s)
@@ -325,11 +559,20 @@ func (m *AuthModel) View() string {
 		}
 
 		s.WriteString("\n")
-		s.WriteString(styles.Subtle.Render("↑↓/jk: navigate | enter: select | esc: back | ctrl+c: quit"))
+		if m.inSavedConnectionsMode {
+			s.WriteString(styles.Subtle.Render("↑↓/jk: navigate | enter: connect | x/del: delete | esc: back | ctrl+c: quit"))
+		} else {
+			s.WriteString(styles.Subtle.Render("↑↓/jk: navigate | enter: select | esc: back | ctrl+c: quit"))
+		}
 		s.WriteString("\n")
 	}
 
-	return s.String()
+	view := s.String()
+	if m.inSaveConnectionPrompt {
+		return m.renderSaveConnectionPrompt(view)
+	}
+
+	return view
 }
 
 func (m *AuthModel) viewNamespaceSelection(s *strings.Builder) {
@@ -393,6 +636,30 @@ func (m *AuthModel) viewAuthSelection(s *strings.Builder) {
 	}
 }
 
+func (m *AuthModel) viewSavedConnections(s *strings.Builder) {
+	s.WriteString(styles.Subtle.Render("Saved Connection Strings"))
+	s.WriteString("\n\n")
+
+	for i, entry := range m.savedConnections {
+		entryID := entry.ID
+		if len(entryID) > 8 {
+			entryID = entryID[:8]
+		}
+		line := fmt.Sprintf("%s  %s", entry.Name, styles.Subtle.Render("("+entryID+")"))
+		if i == m.selectedSavedIdx {
+			s.WriteString(styles.Selected.Render("▶ " + line))
+		} else {
+			s.WriteString("  " + line)
+		}
+		s.WriteString("\n")
+	}
+
+	if len(m.savedConnections) == 0 {
+		s.WriteString(styles.Subtle.Render("No saved connection strings"))
+		s.WriteString("\n")
+	}
+}
+
 func (m *AuthModel) viewConnectionStringInput(s *strings.Builder) {
 	s.WriteString(styles.Subtle.Render("Enter Connection String"))
 	s.WriteString("\n\n")
@@ -418,6 +685,69 @@ func (m *AuthModel) viewServicePrincipalInput(s *strings.Builder) {
 		s.WriteString(m.servicePrincipalInputs[i].View())
 		s.WriteString("\n\n")
 	}
+}
+
+func (m *AuthModel) renderSaveConnectionPrompt(_ string) string {
+	panelWidth := min(60, max(m.width-4, 40))
+	panelHeight := min(14, max(m.height-4, 10))
+	// innerWidth: usable content area inside panel border+padding (same formula as send.go)
+	innerWidth := panelWidth - 6
+	// inputWidth: container width for renderTextInputField (its border+padding = 4 chars overhead)
+	inputWidth := max(innerWidth, 20)
+	m.saveNameInput.Width = inputWidth
+
+	nameEmpty := strings.TrimSpace(m.saveNameInput.Value()) == ""
+
+	var labelStr string
+	if m.savePromptFocus == savePromptFocusName {
+		labelStr = styles.Label.Render("Connection name")
+	} else {
+		labelStr = styles.Subtle.Render("Connection name")
+	}
+
+	renderButton := func(label string, focused bool, disabled bool) string {
+		borderColor := styles.Muted
+		textColor := styles.Muted
+		if focused && !disabled {
+			borderColor = styles.Primary
+			textColor = styles.Primary
+		}
+		return lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(borderColor).
+			Foreground(textColor).
+			Bold(focused && !disabled).
+			Padding(0, 1).
+			Render(label)
+	}
+
+	saveBtn := renderButton("save", m.savePromptFocus == savePromptFocusSave, nameEmpty)
+	skipBtn := renderButton("skip", m.savePromptFocus == savePromptFocusSkip, false)
+	buttons := lipgloss.JoinHorizontal(lipgloss.Top, saveBtn, "  ", skipBtn)
+
+	inputField := renderTextInputField(m.saveNameInput.View(), m.savePromptFocus == savePromptFocusName, inputWidth)
+	// align buttons right edge with input right edge by measuring actual rendered width
+	buttonsRow := lipgloss.NewStyle().Width(lipgloss.Width(inputField)).Align(lipgloss.Right).Render(buttons)
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		styles.Title.Render("Save connection string?"),
+		labelStr,
+		inputField,
+		"",
+		buttonsRow,
+		"",
+		styles.Subtle.Render("tab: focus next • enter: select • esc: skip"),
+	)
+
+	panelStyle := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(styles.Primary).
+		Padding(1, 2).
+		Width(panelWidth).
+		Height(panelHeight)
+
+	overlay := panelStyle.Render(content)
+	return lipgloss.Place(max(m.width, 60), max(m.height+5, 20), lipgloss.Center, lipgloss.Center, overlay)
 }
 
 type NamespacesLoadedMsg struct {
@@ -513,7 +843,31 @@ func (m *AuthModel) connectWithConnectionStringCmd(connectionString string) tea.
 	}
 }
 
+func (m *AuthModel) connectWithConnectionStringAndPromptCmd(connectionString string) tea.Cmd {
+	return func() tea.Msg {
+		client, err := azure.NewServiceBusClientFromConnectionString(connectionString)
+		if err != nil {
+			return ErrorMsg(fmt.Sprintf("failed to connect with connection string: %v", err))
+		}
+
+		namespace := client.GetNamespace()
+
+		log.Printf("connected to namespace via connection string: %s", namespace)
+		return ConnectionStringConnectedMsg{
+			Namespace:        namespace,
+			Client:           client,
+			ConnectionString: strings.TrimSpace(connectionString),
+		}
+	}
+}
+
 type NamespaceConnectedMsg struct {
 	Namespace string
 	Client    *azure.ServiceBusClient
+}
+
+type ConnectionStringConnectedMsg struct {
+	Namespace        string
+	Client           *azure.ServiceBusClient
+	ConnectionString string
 }
