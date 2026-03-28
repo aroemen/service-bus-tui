@@ -1,5 +1,8 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/MonsieurTib/service-bus-tui)](https://goreportcard.com/report/github.com/MonsieurTib/service-bus-tui)
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=MonsieurTib_service-bus-tui&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=MonsieurTib_service-bus-tui)
+[![CI](https://github.com/MonsieurTib/service-bus-tui/actions/workflows/release.yml/badge.svg)](https://github.com/MonsieurTib/service-bus-tui/actions/workflows/release.yml)
+
+[![GitHub Release](https://img.shields.io/github/v/release/MonsieurTib/service-bus-tui)](https://github.com/MonsieurTib/service-bus-tui/releases)
 ![Homebrew](https://img.shields.io/github/v/release/MonsieurTib/service-bus-tui?label=homebrew)
 [![WinGet Version](https://img.shields.io/winget/v/MonsieurTib.service-bus-tui)](https://winstall.app/apps/MonsieurTib.service-bus-tui)
 
