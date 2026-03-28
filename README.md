@@ -9,9 +9,12 @@ A terminal-based explorer for Azure Service Bus.
 
 > **Work in Progress**: This project is currently under active development.
 
-## Preview
+## Previews
 
 <img width="2097" height="1207" alt="asb-tui" src="https://github.com/user-attachments/assets/ed282136-e839-46cc-bd6a-51a274e9372f" />
+
+<img width="2155" height="1234" alt="send-message" src="https://github.com/user-attachments/assets/46610c48-3dde-4142-a781-490e1379ef0b" />
+
 
 ## Features
 
