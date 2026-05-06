@@ -9,9 +9,7 @@ import (
 
 func main() {
 	app.SetTerminalTitle(app.TerminalTitle(""))
-	if err := app.InitClipboard(); err != nil {
-		log.Printf("clipboard init failed, using terminal fallback: %v", err)
-	}
+	_ = app.InitClipboard()
 
 	f, err := tea.LogToFile("debug.log", "debug")
 	if err != nil {
